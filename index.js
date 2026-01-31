@@ -121,10 +121,46 @@ async function searchUSDA(query, maxResults = 5) {
 function extractNutrients(food) {
     const nutrients = food.foodNutrients || [];
     const find = (name) => {
-        const n = nutrients.find(n => (n.nutrientName || n.nutrient?.name || '').toLowerCase().includes(name));
+        const n = nutrients.find(n => (n.nutrientName || n.nutrient?.name || '').toLowerCase().includes(name.toLowerCase()));
         return n?.amount || n?.value || 0;
     };
-    return { calories: Math.round(find('energy')), protein: Math.round(find('protein')), carbs: Math.round(find('carbohydrate')), fat: Math.round(find('total lipid') || find('fat')) };
+    
+    // USDA Nutrient IDs for reference:
+    // Vitamins: A(1106), C(1162), D(1114), E(1109), K(1185), B1(1165), B2(1166), B3(1167), B5(1170), B6(1175), B7(1176), B9(1177), B12(1178)
+    // Minerals: Calcium(1087), Iron(1089), Magnesium(1090), Phosphorus(1091), Potassium(1092), Sodium(1093), Zinc(1095)
+    
+    return { 
+        calories: Math.round(find('energy')), 
+        protein: Math.round(find('protein')), 
+        carbs: Math.round(find('carbohydrate')), 
+        fat: Math.round(find('total lipid') || find('fat')),
+        fiber: Math.round(find('fiber')),
+        sugar: Math.round(find('sugar')),
+        // Vitamins
+        vitaminA: Math.round(find('vitamin a')),
+        vitaminC: Math.round(find('vitamin c') || find('ascorbic acid')),
+        vitaminD: Math.round(find('vitamin d')),
+        vitaminE: Math.round(find('vitamin e')),
+        vitaminK: Math.round(find('vitamin k')),
+        vitaminB1: parseFloat(find('thiamin').toFixed(2)),
+        vitaminB2: parseFloat(find('riboflavin').toFixed(2)),
+        vitaminB3: Math.round(find('niacin')),
+        vitaminB5: parseFloat(find('pantothenic').toFixed(2)),
+        vitaminB6: parseFloat(find('vitamin b-6').toFixed(2)),
+        vitaminB12: parseFloat(find('vitamin b-12').toFixed(2)),
+        folate: Math.round(find('folate')),
+        // Minerals
+        calcium: Math.round(find('calcium')),
+        iron: parseFloat(find('iron').toFixed(1)),
+        magnesium: Math.round(find('magnesium')),
+        phosphorus: Math.round(find('phosphorus')),
+        potassium: Math.round(find('potassium')),
+        sodium: Math.round(find('sodium')),
+        zinc: parseFloat(find('zinc').toFixed(1)),
+        // Extras for supplements
+        caffeine: Math.round(find('caffeine')),
+        creatine: Math.round(find('creatine'))
+    };
 }
 
 async function buildUSDAContext(query) {
@@ -132,7 +168,16 @@ async function buildUSDAContext(query) {
     if (!foods.length) return null;
     return foods.map(f => {
         const n = extractNutrients(f);
-        return `${f.description}: ${n.calories} cal, ${n.protein}g protein, ${n.carbs}g carbs, ${n.fat}g fat per 100g`;
+        let context = `${f.description}: ${n.calories} cal, ${n.protein}g protein, ${n.carbs}g carbs, ${n.fat}g fat`;
+        // Add significant micronutrients
+        if (n.vitaminC > 0) context += `, ${n.vitaminC}mg Vitamin C`;
+        if (n.vitaminD > 0) context += `, ${n.vitaminD}mcg Vitamin D`;
+        if (n.vitaminB12 > 0) context += `, ${n.vitaminB12}mcg B12`;
+        if (n.calcium > 0) context += `, ${n.calcium}mg Calcium`;
+        if (n.iron > 0) context += `, ${n.iron}mg Iron`;
+        if (n.caffeine > 0) context += `, ${n.caffeine}mg Caffeine`;
+        context += ' per 100g';
+        return context;
     }).join('\n');
 }
 
@@ -225,14 +270,19 @@ app.post('/api/ai/parse', authenticateUser, checkAIQuota, async (req, res) => {
     if (!input || input.length > 1000) return res.status(400).json({ error: 'Valid input required (max 1000 chars)' });
     
     try {
-        const foodKeywords = ['ate', 'eat', 'had', 'drink', 'breakfast', 'lunch', 'dinner', 'snack', 'chicken', 'rice', 'eggs', 'protein'];
+        const foodKeywords = ['ate', 'eat', 'had', 'drink', 'breakfast', 'lunch', 'dinner', 'snack', 'chicken', 'rice', 'eggs', 'protein', 'shake', 'pre-workout', 'preworkout', 'supplement', 'vitamin', 'carnivore', 'prekaged', 'creatine'];
         const looksLikeFood = foodKeywords.some(kw => input.toLowerCase().includes(kw));
         const usdaContext = looksLikeFood ? await buildUSDAContext(input) : null;
         
         let systemPrompt = `You are a fitness/nutrition parser. Analyze input and determine if it's FOOD, WORKOUT, CARDIO, or WEIGHT/BODY METRICS.
 Respond ONLY with valid JSON (no markdown). Format:
 
-For FOOD: {"type":"food","data":{"items":[{"name":"Food","quantity":"amount","calories":0,"protein":0,"carbs":0,"fat":0}],"totals":{"calories":0,"protein":0,"carbs":0,"fat":0}}}
+For FOOD (including supplements, protein shakes, pre-workouts): 
+{"type":"food","data":{"items":[{"name":"Food Name","quantity":"1 scoop","calories":0,"protein":0,"carbs":0,"fat":0,"fiber":0,"sugar":0,"micronutrients":{"vitaminC":0,"vitaminD":0,"vitaminB12":0,"calcium":0,"iron":0,"magnesium":0,"potassium":0,"sodium":0,"caffeine":0,"creatine":0}}],"totals":{"calories":0,"protein":0,"carbs":0,"fat":0},"mealType":"supplement"}}
+
+For common supplements, use these known values:
+- Pre-Kaged Elite (1 scoop): 25 cal, 0g protein, 5g carbs, caffeine 388mg, creatine 5g (total), vitaminB6 35mg, vitaminB12 1000mcg, citrulline 10g, beta-alanine 3.2g
+- Carnivore/Carnivor Protein (1 scoop): 120 cal, 23g protein, 8g carbs, 0g fat, creatine (added BCAAs)
 
 For WORKOUT: {"type":"workout","data":{"exercises":[{"name":"Exercise","sets":3,"reps":10,"weight":135,"category":"chest|back|shoulders|arms|legs|core"}]}}
 
@@ -242,7 +292,7 @@ For WEIGHT/BODY METRICS (when user logs their body weight, body fat, or measurem
 {"type":"weight","data":{"weight":185,"unit":"lbs","bodyFat":null,"measurements":null,"note":"morning weigh-in"}}
 
 Weight triggers: "weighed", "weight is", "scale said", "i'm at", "body weight", "lbs", "kg", "pounds", "kilos"
-If user mentions body fat percentage, include it. If they mention measurements (waist, chest, arms, etc), include as object.`;
+Include micronutrients when available, especially for supplements and fortified foods. Zero values can be omitted.`;
         
         if (usdaContext) systemPrompt += `\n\nUSDA Reference (use for accuracy):\n${usdaContext}`;
         
@@ -434,6 +484,70 @@ app.post('/api/stripe/donate', authenticateUser, async (req, res) => {
     } catch (error) {
         console.error('Donation checkout error:', error);
         res.status(500).json({ error: 'Failed to create donation checkout' });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// USER DATA SYNC ENDPOINTS
+// ═══════════════════════════════════════════════════════════════
+
+// Save user data to cloud
+app.post('/api/user/sync', authenticateUser, async (req, res) => {
+    try {
+        const { activities, goals, profile, stats, prs, weightHistory } = req.body;
+        
+        const { error } = await supabase.from('user_data').upsert({
+            user_id: req.user.id,
+            activities: activities || {},
+            goals: goals || {},
+            profile_data: profile || {},
+            stats: stats || {},
+            prs: prs || {},
+            weight_history: weightHistory || [],
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+        
+        if (error) throw error;
+        res.json({ success: true, synced_at: new Date().toISOString() });
+    } catch (error) {
+        console.error('Sync error:', error);
+        res.status(500).json({ error: 'Failed to sync data' });
+    }
+});
+
+// Load user data from cloud
+app.get('/api/user/data', authenticateUser, async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('user_data')
+            .select('*')
+            .eq('user_id', req.user.id)
+            .single();
+        
+        if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows found
+        
+        if (!data) {
+            return res.json({ 
+                activities: {}, 
+                goals: { calories: 2000, protein: 150, carbs: 200, fat: 65 },
+                profile: {},
+                stats: { streak: 0, weeklyPoints: 0 },
+                prs: {},
+                weightHistory: []
+            });
+        }
+        
+        res.json({
+            activities: data.activities || {},
+            goals: data.goals || {},
+            profile: data.profile_data || {},
+            stats: data.stats || {},
+            prs: data.prs || {},
+            weightHistory: data.weight_history || []
+        });
+    } catch (error) {
+        console.error('Load error:', error);
+        res.status(500).json({ error: 'Failed to load data' });
     }
 });
 
