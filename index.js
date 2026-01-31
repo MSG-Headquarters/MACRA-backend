@@ -212,11 +212,20 @@ app.post('/api/ai/parse', authenticateUser, checkAIQuota, async (req, res) => {
         const looksLikeFood = foodKeywords.some(kw => input.toLowerCase().includes(kw));
         const usdaContext = looksLikeFood ? await buildUSDAContext(input) : null;
         
-        let systemPrompt = `You are a fitness/nutrition parser. Analyze input and determine if it's FOOD, WORKOUT, or CARDIO.
+        let systemPrompt = `You are a fitness/nutrition parser. Analyze input and determine if it's FOOD, WORKOUT, CARDIO, or WEIGHT/BODY METRICS.
 Respond ONLY with valid JSON (no markdown). Format:
+
 For FOOD: {"type":"food","data":{"items":[{"name":"Food","quantity":"amount","calories":0,"protein":0,"carbs":0,"fat":0}],"totals":{"calories":0,"protein":0,"carbs":0,"fat":0}}}
+
 For WORKOUT: {"type":"workout","data":{"exercises":[{"name":"Exercise","sets":3,"reps":10,"weight":135,"category":"chest|back|shoulders|arms|legs|core"}]}}
-For CARDIO: {"type":"cardio","data":{"activity":"Running","duration":30,"distance":3.5,"caloriesBurned":300}}`;
+
+For CARDIO: {"type":"cardio","data":{"activity":"Running","duration":30,"distance":3.5,"caloriesBurned":300}}
+
+For WEIGHT/BODY METRICS (when user logs their body weight, body fat, or measurements):
+{"type":"weight","data":{"weight":185,"unit":"lbs","bodyFat":null,"measurements":null,"note":"morning weigh-in"}}
+
+Weight triggers: "weighed", "weight is", "scale said", "i'm at", "body weight", "lbs", "kg", "pounds", "kilos"
+If user mentions body fat percentage, include it. If they mention measurements (waist, chest, arms, etc), include as object.`;
         
         if (usdaContext) systemPrompt += `\n\nUSDA Reference (use for accuracy):\n${usdaContext}`;
         
