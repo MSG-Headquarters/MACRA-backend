@@ -200,6 +200,23 @@ app.post('/api/auth/refresh', async (req, res) => {
     }
 });
 
+app.post('/api/auth/forgot-password', async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email required' });
+    
+    try {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+            redirectTo: 'https://macra.umbrassi.com/reset-password'
+        });
+        if (error) throw error;
+        res.json({ message: 'Password reset email sent' });
+    } catch (error) {
+        console.error('Password reset error:', error);
+        // Don't reveal if email exists or not for security
+        res.json({ message: 'If an account exists, a reset email has been sent' });
+    }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // ROUTES: AI
 // ═══════════════════════════════════════════════════════════════
