@@ -578,6 +578,88 @@ app.post('/api/stripe/webhook', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// GOOGLE PLACES API - NEARBY GYMS
+// ═══════════════════════════════════════════════════════════════
+const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
+
+app.get('/api/places/nearby', authenticateUser, async (req, res) => {
+    const { lat, lng, type = 'gym', radius = 16000 } = req.query; // Default 10 mile radius
+    
+    if (!lat || !lng) {
+        return res.status(400).json({ error: 'Latitude and longitude required' });
+    }
+    
+    if (!GOOGLE_PLACES_API_KEY) {
+        // Return mock data if no API key configured
+        return res.json({
+            results: [
+                { place_id: 'mock1', name: 'Second Chance Gym', vicinity: 'Brandon, FL', rating: 4.8, user_ratings_total: 156, distance: 2.3 },
+                { place_id: 'mock2', name: 'Muscle Asylum', vicinity: 'Tampa, FL', rating: 4.6, user_ratings_total: 89, distance: 8.1 },
+                { place_id: 'mock3', name: "Rich's Health Club @ Southpointe", vicinity: 'Brandon, FL', rating: 4.9, user_ratings_total: 234, distance: 3.5 },
+                { place_id: 'mock4', name: 'Planet Fitness', vicinity: 'Brandon, FL', rating: 4.2, user_ratings_total: 412, distance: 1.8 },
+                { place_id: 'mock5', name: 'LA Fitness', vicinity: 'Tampa, FL', rating: 4.0, user_ratings_total: 567, distance: 5.2 }
+            ],
+            mock: true
+        });
+    }
+    
+    try {
+        const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=${type}&keyword=gym|fitness&key=${GOOGLE_PLACES_API_KEY}`;
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+            console.error('Google Places API error:', data.status, data.error_message);
+            return res.status(500).json({ error: 'Places API error', status: data.status });
+        }
+        
+        // Calculate distance for each result
+        const results = (data.results || []).map(place => {
+            const placeLat = place.geometry?.location?.lat;
+            const placeLng = place.geometry?.location?.lng;
+            let distance = null;
+            
+            if (placeLat && placeLng) {
+                distance = calculateDistance(parseFloat(lat), parseFloat(lng), placeLat, placeLng);
+            }
+            
+            return {
+                place_id: place.place_id,
+                name: place.name,
+                vicinity: place.vicinity,
+                rating: place.rating,
+                user_ratings_total: place.user_ratings_total,
+                distance: distance,
+                photo_reference: place.photos?.[0]?.photo_reference,
+                open_now: place.opening_hours?.open_now
+            };
+        });
+        
+        // Sort by distance
+        results.sort((a, b) => (a.distance || 999) - (b.distance || 999));
+        
+        res.json({ results: results.slice(0, 15) });
+        
+    } catch (error) {
+        console.error('Places API error:', error);
+        res.status(500).json({ error: 'Failed to fetch nearby places' });
+    }
+});
+
+// Haversine formula to calculate distance in miles
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 3959; // Earth's radius in miles
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return Math.round(R * c * 10) / 10; // Round to 1 decimal
+}
+
+// ═══════════════════════════════════════════════════════════════
 // START SERVER
 // ═══════════════════════════════════════════════════════════════
 app.listen(PORT, () => {
