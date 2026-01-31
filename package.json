@@ -2,10 +2,10 @@
   "name": "macra-backend",
   "version": "1.0.0",
   "description": "MACRA Fitness Tracker Backend API",
-  "main": "src/index.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
