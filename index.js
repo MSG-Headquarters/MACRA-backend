@@ -349,6 +349,80 @@ app.get('/api/nutrition/common', authenticateUser, (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// ROUTES: AI PHOTO ANALYSIS
+// ═══════════════════════════════════════════════════════════════
+app.post('/api/ai/photo', authenticateUser, checkAIQuota, async (req, res) => {
+    const { image, mimeType } = req.body;
+    if (!image) return res.status(400).json({ error: 'Image data required' });
+    
+    try {
+        const response = await anthropic.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1024,
+            messages: [{
+                role: 'user',
+                content: [
+                    {
+                        type: 'image',
+                        source: {
+                            type: 'base64',
+                            media_type: mimeType || 'image/jpeg',
+                            data: image
+                        }
+                    },
+                    {
+                        type: 'text',
+                        text: `Analyze this food image and estimate nutritional information.
+Respond with ONLY valid JSON, no markdown or backticks:
+{
+  "type": "food",
+  "confidence": 0.9,
+  "data": {
+    "items": [{"name": "food name", "calories": 0, "protein": 0, "carbs": 0, "fat": 0}],
+    "totals": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0},
+    "mealType": "snack"
+  }
+}
+
+Be accurate with estimates based on typical portion sizes visible in the image.
+If you cannot identify food in the image, respond with: {"type": "unknown", "error": "Could not identify food"}`
+                    }
+                ]
+            }]
+        });
+        
+        const text = response.content[0].text;
+        let result;
+        
+        // Try to extract JSON
+        try {
+            // Remove any markdown backticks if present
+            const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            result = JSON.parse(cleaned);
+        } catch (e) {
+            // Try to find JSON in the response
+            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                result = JSON.parse(jsonMatch[0]);
+            } else {
+                throw new Error('Could not parse AI response');
+            }
+        }
+        
+        // Increment AI usage
+        await supabase.from('profiles').update({
+            ai_messages_used: (req.user.ai_messages_used || 0) + 1
+        }).eq('id', req.user.id);
+        
+        res.json({ result });
+        
+    } catch (error) {
+        console.error('Photo analysis error:', error);
+        res.status(500).json({ error: 'Failed to analyze photo: ' + error.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════
 // ROUTES: USER
 // ═══════════════════════════════════════════════════════════════
 app.get('/api/user/profile', authenticateUser, async (req, res) => {
