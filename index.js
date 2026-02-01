@@ -10,6 +10,20 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 
 const app = express();
+
+// Debug test endpoint (no middleware)
+app.get('/test-auth', async (req, res) => {
+    const token = req.headers['authorization']?.split(' ')[1];
+    console.log('Test auth hit, token:', token?.substring(0, 30) + '...');
+    if (!token) return res.json({ error: 'No token provided' });
+    try {
+        const { data, error } = await supabase.auth.getUser(token);
+        console.log('Supabase response:', { user: data?.user?.email, error: error?.message });
+        res.json({ user: data?.user?.email, error: error?.message });
+    } catch (e) {
+        res.json({ exception: e.message });
+    }
+});
 const PORT = process.env.PORT || 3000;
 
 // Initialize Supabase
@@ -828,6 +842,7 @@ app.post('/api/v2/learning/predict-next', authenticateToken, async (req, res) =>
 app.listen(PORT, () => {
     console.log(`🚀 MACRA Backend v2.0 running on port ${PORT}`);
 });
+
 
 
 
