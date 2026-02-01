@@ -57,16 +57,22 @@ const JWT_SECRET = process.env.JWT_SECRET || 'macra-secret-key-change-in-product
 // AUTH MIDDLEWARE
 // ═══════════════════════════════════════════════════════════════
 
-function authenticateToken(req, res, next) {
+async function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) return res.status(401).json({ error: 'Access token required' });
     
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ error: 'Invalid or expired token' });
-        req.user = user;
+    try {
+        // Verify token with Supabase
+        const { data: { user }, error } = await supabase.auth.getUser(token);
+        if (error || !user) {
+            return res.status(403).json({ error: 'Invalid or expired token' });
+        }
+        req.user = { userId: user.id, email: user.email };
         next();
-    });
+    } catch (err) {
+        return res.status(403).json({ error: 'Token verification failed' });
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -822,4 +828,5 @@ app.post('/api/v2/learning/predict-next', authenticateToken, async (req, res) =>
 app.listen(PORT, () => {
     console.log(`🚀 MACRA Backend v2.0 running on port ${PORT}`);
 });
+
 
