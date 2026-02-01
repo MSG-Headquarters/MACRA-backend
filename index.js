@@ -107,23 +107,34 @@ app.post('/api/auth/signup', async (req, res) => {
     try {
         const { email, password, name } = req.body;
         if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
-        
-        const { data: existing } = await supabase.from('users').select('id').eq('email', email.toLowerCase()).single();
-        if (existing) return res.status(400).json({ error: 'Email already registered' });
-        
-        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Create user with Supabase Auth
+        const { data, error: authError } = await supabase.auth.signUp({
+            email: email.toLowerCase(),
+            password: password,
+            options: {
+                data: { name: name || 'Athlete' }
+            }
+        });
+
+        if (authError) {
+            if (authError.message.includes('already registered')) {
+                return res.status(400).json({ error: 'Email already registered' });
+            }
+            throw authError;
+        }
+
+        // Create the users row with the auth user's ID
         const athleteCode = 'MACRA-' + crypto.randomBytes(2).toString('hex').toUpperCase();
         
-        const { data: user, error } = await supabase.from('users').insert({
+        await supabase.from('users').upsert({
+            id: data.user.id,
             email: email.toLowerCase(),
-            password_hash: hashedPassword,
             name: name || 'Athlete',
             athlete_code: athleteCode,
-            tier: 'free',
-            created_at: new Date().toISOString()
-        }).select().single();
-        
-        if (error) throw error;
+            tier: 'free'
+        }, { onConflict: 'id' });
+
         res.json({ success: true, message: 'Account created', athleteCode });
     } catch (error) {
         console.error('Signup error:', error);
