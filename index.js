@@ -81,7 +81,7 @@ async function authenticateToken(req, res, next) {
 // ═══════════════════════════════════════════════════════════════
 
 app.get('/health', (req, res) => {
-    res.json({ status: 'healthy', service: 'macra-backend', version: '2.0.0', timestamp: new Date().toISOString() });
+    res.json({ status: 'healthy', service: 'macra-backend', version: '2.0.1', timestamp: new Date().toISOString() });
 });
 
 // Debug test endpoint
@@ -856,6 +856,7 @@ app.post('/api/v2/learning/predict-next', authenticateToken, async (req, res) =>
 app.listen(PORT, () => {
     console.log(`🚀 MACRA Backend v2.0 running on port ${PORT}`);
 });
+
 
 
 
