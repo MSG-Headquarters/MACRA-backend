@@ -266,13 +266,13 @@ Be accurate with portions visible. Return ONLY valid JSON.` }
 
 app.post('/api/user/sync', authenticateToken, async (req, res) => {
     try {
-        const { activities, goals, profile, stats, prs, weightHistory } = req.body;
+        const { activities, goals, profile_data, stats, prs, weightHistory } = req.body;
         
         const { error } = await supabase.from('user_data').upsert({
             user_id: req.user.userId,
             activities: activities || {},
             goals: goals || {},
-            profile: profile || {},
+            profile_data: profile_data || {},
             stats: stats || {},
             prs: prs || {},
             weight_history: weightHistory || [],
@@ -292,7 +292,7 @@ app.get('/api/user/data', authenticateToken, async (req, res) => {
         const { data, error } = await supabase.from('user_data').select('*').eq('user_id', req.user.userId).single();
         if (error && error.code !== 'PGRST116') throw error;
         
-        res.json(data || { activities: {}, goals: {}, profile: {}, stats: {}, prs: {}, weightHistory: [] });
+        res.json(data || { activities: {}, goals: {}, profile_data: {}, stats: {}, prs: {}, weightHistory: [] });
     } catch (error) {
         console.error('Get data error:', error);
         res.status(500).json({ error: 'Failed to get data' });
@@ -856,6 +856,9 @@ app.post('/api/v2/learning/predict-next', authenticateToken, async (req, res) =>
 app.listen(PORT, () => {
     console.log(`🚀 MACRA Backend v2.0 running on port ${PORT}`);
 });
+
+
+
 
 
 
