@@ -136,18 +136,30 @@ app.post('/api/auth/login', async (req, res) => {
         const { email, password } = req.body;
         if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
         
-        const { data: user, error } = await supabase.from('users').select('*').eq('email', email.toLowerCase()).single();
-        if (error || !user) return res.status(401).json({ error: 'Invalid credentials' });
+        // Use Supabase Auth for login
+        const { data, error } = await supabase.auth.signInWithPassword({
+            email: email.toLowerCase(),
+            password: password
+        });
         
-        const validPassword = await bcrypt.compare(password, user.password_hash);
-        if (!validPassword) return res.status(401).json({ error: 'Invalid credentials' });
+        if (error || !data.user) {
+            console.log('Supabase auth error:', error?.message);
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
         
-        const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
-        const refreshToken = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '30d' });
+        // Get user profile from users table
+        const { data: profile } = await supabase.from('users').select('*').eq('id', data.user.id).single();
         
         res.json({
-            token, refreshToken,
-            user: { id: user.id, email: user.email, name: user.name, athleteCode: user.athlete_code, tier: user.tier }
+            token: data.session.access_token,
+            refreshToken: data.session.refresh_token,
+            user: {
+                id: data.user.id,
+                email: data.user.email,
+                name: profile?.name || 'Athlete',
+                athleteCode: profile?.athlete_code || 'MACRA-0000',
+                tier: profile?.tier || 'free'
+            }
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -844,6 +856,7 @@ app.post('/api/v2/learning/predict-next', authenticateToken, async (req, res) =>
 app.listen(PORT, () => {
     console.log(`🚀 MACRA Backend v2.0 running on port ${PORT}`);
 });
+
 
 
 
