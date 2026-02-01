@@ -39,6 +39,9 @@ app.use(cors({
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
 
+// Trust proxy (Railway runs behind proxy)
+app.set('trust proxy', 1);
+
 // Global rate limiter
 const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -819,3 +822,4 @@ app.post('/api/v2/learning/predict-next', authenticateToken, async (req, res) =>
 app.listen(PORT, () => {
     console.log(`🚀 MACRA Backend v2.0 running on port ${PORT}`);
 });
+
