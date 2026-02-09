@@ -529,16 +529,25 @@ app.post('/api/auth/signup', async (req, res) => {
         }
 
         // Create the users row with the auth user's ID
-        const athleteCode = 'MACRA-' + crypto.randomBytes(2).toString('hex').toUpperCase();
-        
-        await supabase.from('users').upsert({
+        const athleteCode = 'MACRA-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+
+        const { error: userError } = await supabase.from('users').upsert({
             id: data.user.id,
             email: email.toLowerCase(),
             name: name || 'Athlete',
             athlete_code: athleteCode,
-            tier: 'free'
+            is_public: true,
+            tier: 'free',
+            total_workouts: 0,
+            current_streak: 0
         }, { onConflict: 'id' });
 
+        if (userError) {
+            console.error('Failed to create user record:', userError);
+            // Don't fail signup, but log the issue
+        }
+
+        console.log('New user created:', email, athleteCode);
         res.json({ success: true, message: 'Account created', athleteCode });
     } catch (error) {
         console.error('Signup error:', error);
