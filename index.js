@@ -630,7 +630,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 // Discover random public users to follow
 app.get('/api/users/discover', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = req.user.userId;
         const limit = parseInt(req.query.limit) || 3;
         
         // Get user's current following list
@@ -731,7 +731,7 @@ app.get('/api/users/profile/:athleteCode', authenticateToken, async (req, res) =
 // Follow a user by athlete code
 app.post('/api/users/follow', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = req.user.userId;
         const { athleteCode } = req.body;
         
         if (!athleteCode) {
@@ -794,7 +794,7 @@ app.post('/api/users/follow', authenticateToken, async (req, res) => {
 // Unfollow a user
 app.post('/api/users/unfollow', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = req.user.userId;
         const { targetUserId } = req.body;
         
         if (!targetUserId) {
@@ -828,7 +828,7 @@ app.post('/api/users/unfollow', authenticateToken, async (req, res) => {
 // Update profile visibility
 app.post('/api/users/privacy', authenticateToken, async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = req.user.userId;
         const { isPublic } = req.body;
         
         const { error } = await supabase
