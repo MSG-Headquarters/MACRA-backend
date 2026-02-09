@@ -77,138 +77,394 @@ async function authenticateToken(req, res, next) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// USDA FOODDATA CENTRAL
+// NUTRITION LOOKUP SYSTEM (USDA + NIH DSLD + Cache)
 // ═══════════════════════════════════════════════════════════════
 
-async function searchUSDA(query, maxResults = 3) {
-    console.log('USDA lookup for:', query);
-    if (!process.env.USDA_API_KEY) {
-        console.log('No USDA API key found');
-        return null;
-    }
+// Normalize query for cache key
+function normalizeQuery(input) {
+    return input.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+// Check cache first
+async function checkNutritionCache(input) {
+    const queryKey = normalizeQuery(input);
     try {
-        console.log('Fetching from USDA...');
-        const response = await fetch(
-            `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${process.env.USDA_API_KEY}&query=${encodeURIComponent(query)}&pageSize=${maxResults}&dataType=Foundation,SR%20Legacy`
-        );
-        if (!response.ok) {
-            console.log('USDA response not ok:', response.status);
-            return null;
+        const { data, error } = await supabase
+            .from('nutrition_cache')
+            .select('*')
+            .eq('query_key', queryKey)
+            .single();
+        
+        if (data && !error) {
+            // Increment hit count
+            await supabase
+                .from('nutrition_cache')
+                .update({ hit_count: data.hit_count + 1, updated_at: new Date().toISOString() })
+                .eq('id', data.id);
+            
+            console.log('Cache HIT for:', input);
+            return data;
         }
+    } catch (e) {
+        // No cache hit
+    }
+    console.log('Cache MISS for:', input);
+    return null;
+}
+
+// Save to cache
+async function saveToNutritionCache(input, category, source, sourceId, nutritionData, micronutrients) {
+    const queryKey = normalizeQuery(input);
+    try {
+        await supabase
+            .from('nutrition_cache')
+            .upsert({
+                query_key: queryKey,
+                input_text: input,
+                category,
+                source,
+                source_id: sourceId,
+                nutrition_data: nutritionData,
+                micronutrients: micronutrients || {},
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'query_key' });
+        console.log('Cached:', input);
+    } catch (e) {
+        console.error('Cache save error:', e.message);
+    }
+}
+
+// Search USDA for whole foods
+async function searchUSDA(query) {
+    console.log('USDA lookup for:', query);
+    if (!process.env.USDA_API_KEY) return null;
+    
+    try {
+        const response = await fetch(
+            `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${process.env.USDA_API_KEY}&query=${encodeURIComponent(query)}&pageSize=3&dataType=Foundation,SR%20Legacy`
+        );
+        if (!response.ok) return null;
+        
         const data = await response.json();
-        console.log('USDA found', data.foods?.length || 0, 'foods');
         if (!data.foods || data.foods.length === 0) return null;
         
-        const result = data.foods.map(food => {
-            const nutrients = food.foodNutrients || [];
-            const find = (name) => {
-                const n = nutrients.find(n => (n.nutrientName || '').toLowerCase().includes(name.toLowerCase()));
-                return n?.value || 0;
-            };
-            
-            // Macros
-            const cal = Math.round(find('energy'));
-            const pro = Math.round(find('protein'));
-            const carb = Math.round(find('carbohydrate'));
-            const fat = Math.round(find('total lipid') || find('fat'));
-            const fiber = Math.round(find('fiber'));
-            const sugar = Math.round(find('sugar'));
-            
-            // Vitamins
-            const vitA = Math.round(find('vitamin a'));
-            const vitC = Math.round(find('ascorbic acid') || find('vitamin c'));
-            const vitD = Math.round(find('vitamin d'));
-            const vitE = Math.round(find('vitamin e'));
-            const vitK = Math.round(find('vitamin k'));
-            const vitB6 = parseFloat(find('vitamin b-6').toFixed(2));
-            const vitB12 = parseFloat(find('vitamin b-12').toFixed(2));
-            const thiamin = parseFloat(find('thiamin').toFixed(2));
-            const riboflavin = parseFloat(find('riboflavin').toFixed(2));
-            const niacin = Math.round(find('niacin'));
-            const folate = Math.round(find('folate'));
-            
-            // Minerals
-            const calcium = Math.round(find('calcium'));
-            const iron = parseFloat(find('iron').toFixed(1));
-            const magnesium = Math.round(find('magnesium'));
-            const phosphorus = Math.round(find('phosphorus'));
-            const potassium = Math.round(find('potassium'));
-            const sodium = Math.round(find('sodium'));
-            const zinc = parseFloat(find('zinc').toFixed(1));
-            
-            let info = `${food.description}: ${cal}cal, ${pro}g protein, ${carb}g carbs, ${fat}g fat`;
-            if (fiber) info += `, ${fiber}g fiber`;
-            if (vitC) info += `, ${vitC}mg Vit C`;
-            if (vitD) info += `, ${vitD}mcg Vit D`;
-            if (vitB12) info += `, ${vitB12}mcg B12`;
-            if (calcium) info += `, ${calcium}mg calcium`;
-            if (iron) info += `, ${iron}mg iron`;
-            if (magnesium) info += `, ${magnesium}mg magnesium`;
-            if (potassium) info += `, ${potassium}mg potassium`;
-            if (sodium) info += `, ${sodium}mg sodium`;
-            info += ' per 100g';
-            return info;
-        }).join('\n');
+        const food = data.foods[0];
+        const nutrients = food.foodNutrients || [];
+        const find = (name) => {
+            const n = nutrients.find(n => (n.nutrientName || '').toLowerCase().includes(name.toLowerCase()));
+            return n?.value || 0;
+        };
         
-        console.log('USDA data:', result.substring(0, 150));
-        return result;
+        return {
+            source: 'usda',
+            sourceId: food.fdcId?.toString(),
+            name: food.description,
+            nutrition: {
+                calories: Math.round(find('energy')),
+                protein: Math.round(find('protein')),
+                carbs: Math.round(find('carbohydrate')),
+                fat: Math.round(find('total lipid') || find('fat')),
+                fiber: Math.round(find('fiber')),
+                sugar: Math.round(find('sugar')),
+                sodium: Math.round(find('sodium'))
+            },
+            micronutrients: {
+                vitaminA: Math.round(find('vitamin a')),
+                vitaminC: Math.round(find('ascorbic acid') || find('vitamin c')),
+                vitaminD: Math.round(find('vitamin d')),
+                vitaminE: Math.round(find('vitamin e')),
+                vitaminK: Math.round(find('vitamin k')),
+                vitaminB6: parseFloat(find('vitamin b-6').toFixed(2)),
+                vitaminB12: parseFloat(find('vitamin b-12').toFixed(2)),
+                thiamin: parseFloat(find('thiamin').toFixed(2)),
+                riboflavin: parseFloat(find('riboflavin').toFixed(2)),
+                niacin: Math.round(find('niacin')),
+                folate: Math.round(find('folate')),
+                calcium: Math.round(find('calcium')),
+                iron: parseFloat(find('iron').toFixed(1)),
+                magnesium: Math.round(find('magnesium')),
+                zinc: parseFloat(find('zinc').toFixed(1)),
+                potassium: Math.round(find('potassium')),
+                phosphorus: Math.round(find('phosphorus'))
+            }
+        };
     } catch (error) {
-        console.error('USDA API error:', error.message);
+        console.error('USDA error:', error.message);
         return null;
     }
 }
 
-// Detect if input is a supplement/brand
-function isSupplementBrand(input) {
-    const brands = ['pre-kaged', 'prekaged', 'pre kaged', 'kaged', 'carnivore', 'bsn', 'optimum nutrition', 'gold standard', 'c4', 'cellucor', 'ghost', 'ryse', 'gorilla mode', 'transparent labs', 'legion', 'jym', 'musclepharm', 'dymatize', 'muscletech', 'allmax', 'redcon1', 'rule 1', 'r1', 'evl', 'mutant', 'animal pak', 'universal nutrition', 'now sports', 'garden of life', 'douglas labs', 'thorne', 'pure encapsulations', 'seeking health', 'designs for health', 'metagenics', 'ortho molecular', 'klean athlete', 'momentous', 'creatine', 'protein powder', 'mass gainer', 'pre workout', 'preworkout', 'bcaa', 'eaa', 'amino', 'whey', 'casein', 'isolate'];
-    const lower = input.toLowerCase();
-    return brands.some(brand => lower.includes(brand));
+// Search NIH DSLD for supplements
+async function searchNIHDSLD(query) {
+    console.log('NIH DSLD lookup for:', query);
+    
+    try {
+        // Search for products
+        const searchUrl = `https://api.ods.od.nih.gov/dsld/v9/browse-products?q=${encodeURIComponent(query)}&size=5`;
+        const searchResponse = await fetch(searchUrl);
+        
+        if (!searchResponse.ok) {
+            console.log('NIH DSLD search failed:', searchResponse.status);
+            return null;
+        }
+        
+        const searchData = await searchResponse.json();
+        
+        if (!searchData.hits || searchData.hits.length === 0) {
+            console.log('NIH DSLD: No products found');
+            return null;
+        }
+        
+        // Get the first matching product's full label
+        const productId = searchData.hits[0].dsld_id;
+        console.log('NIH DSLD found product ID:', productId);
+        
+        const labelUrl = `https://api.ods.od.nih.gov/dsld/v9/label/${productId}`;
+        const labelResponse = await fetch(labelUrl);
+        
+        if (!labelResponse.ok) {
+            console.log('NIH DSLD label fetch failed');
+            return null;
+        }
+        
+        const labelData = await labelResponse.json();
+        
+        // Extract nutrition from label
+        const ingredients = labelData.ingredients || [];
+        const servingSize = labelData.serving_size || '1 serving';
+        
+        // Build micronutrients from ingredients
+        const micronutrients = {};
+        const nutritionMap = {
+            'vitamin a': 'vitaminA',
+            'vitamin c': 'vitaminC',
+            'ascorbic acid': 'vitaminC',
+            'vitamin d': 'vitaminD',
+            'cholecalciferol': 'vitaminD',
+            'vitamin e': 'vitaminE',
+            'vitamin k': 'vitaminK',
+            'vitamin b6': 'vitaminB6',
+            'pyridoxine': 'vitaminB6',
+            'vitamin b12': 'vitaminB12',
+            'cobalamin': 'vitaminB12',
+            'cyanocobalamin': 'vitaminB12',
+            'thiamin': 'thiamin',
+            'vitamin b1': 'thiamin',
+            'riboflavin': 'riboflavin',
+            'vitamin b2': 'riboflavin',
+            'niacin': 'niacin',
+            'vitamin b3': 'niacin',
+            'folate': 'folate',
+            'folic acid': 'folate',
+            'biotin': 'biotin',
+            'pantothenic': 'pantothenicAcid',
+            'calcium': 'calcium',
+            'iron': 'iron',
+            'magnesium': 'magnesium',
+            'zinc': 'zinc',
+            'selenium': 'selenium',
+            'copper': 'copper',
+            'manganese': 'manganese',
+            'chromium': 'chromium',
+            'molybdenum': 'molybdenum',
+            'potassium': 'potassium',
+            'sodium': 'sodium',
+            'phosphorus': 'phosphorus',
+            'iodine': 'iodine',
+            'caffeine': 'caffeine',
+            'creatine': 'creatine',
+            'beta-alanine': 'betaAlanine',
+            'citrulline': 'citrulline',
+            'l-citrulline': 'citrulline',
+            'arginine': 'arginine',
+            'l-arginine': 'arginine',
+            'taurine': 'taurine',
+            'carnitine': 'carnitine',
+            'l-carnitine': 'carnitine'
+        };
+        
+        for (const ingredient of ingredients) {
+            const name = (ingredient.ingredient_name || '').toLowerCase();
+            const amount = parseFloat(ingredient.ingredient_amount) || 0;
+            const unit = ingredient.ingredient_unit || '';
+            
+            for (const [key, nutrientKey] of Object.entries(nutritionMap)) {
+                if (name.includes(key)) {
+                    micronutrients[nutrientKey] = {
+                        amount: amount,
+                        unit: unit
+                    };
+                    break;
+                }
+            }
+        }
+        
+        console.log('NIH DSLD extracted', Object.keys(micronutrients).length, 'nutrients');
+        
+        return {
+            source: 'nih_dsld',
+            sourceId: productId.toString(),
+            name: labelData.product_name || searchData.hits[0].product_name,
+            brand: labelData.brand_name,
+            servingSize: servingSize,
+            nutrition: {
+                calories: 0, // Supplements typically don't have calories
+                protein: 0,
+                carbs: 0,
+                fat: 0
+            },
+            micronutrients: micronutrients
+        };
+    } catch (error) {
+        console.error('NIH DSLD error:', error.message);
+        return null;
+    }
 }
 
-// Search for supplement info using Claude with web search
-async function searchSupplementInfo(query) {
-    console.log('Supplement search for:', query);
+// AI classification: is this food or supplement?
+async function classifyInput(input) {
     try {
         const message = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',
-            max_tokens: 2048,
+            max_tokens: 50,
+            messages: [{ 
+                role: 'user', 
+                content: `Classify this as either "food" or "supplement". Only respond with one word.
+                
+Input: "${input}"
+
+Guidelines:
+- "food" = whole foods, meals, ingredients, restaurant items, home-cooked dishes
+- "supplement" = vitamins, protein powders, pre-workouts, capsules, tablets, branded fitness products
+
+Response (one word only):` 
+            }]
+        });
+        
+        const classification = message.content[0].text.toLowerCase().trim();
+        console.log('AI classified as:', classification);
+        return classification.includes('supplement') ? 'supplement' : 'food';
+    } catch (error) {
+        console.error('Classification error:', error.message);
+        return 'food'; // Default to food
+    }
+}
+
+// Web search fallback for supplements not in NIH DSLD
+async function searchSupplementWeb(query) {
+    console.log('Web search fallback for:', query);
+    
+    try {
+        const message = await anthropic.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1500,
             tools: [{
                 type: 'web_search_20250305',
                 name: 'web_search'
             }],
             messages: [{
                 role: 'user',
-                content: `Search for the complete nutrition facts and supplement facts for "${query}". 
-                
-I need the EXACT values from the product label including:
-- Serving size
-- Calories, protein, carbs, fat
-- All vitamins with amounts and %DV (Vitamin A, C, D, E, K, B1, B2, B3, B5, B6, B12, Folate, Biotin)
-- All minerals with amounts and %DV (Calcium, Iron, Magnesium, Zinc, Sodium, Potassium, Phosphorus, Iodine, Selenium, Copper, Manganese, Chromium)
-- Any other active ingredients (caffeine, creatine, beta-alanine, citrulline, etc.)
+                content: `Find the supplement facts label for "${query}". 
+Return ONLY a JSON object with the nutrition information. Search the official brand website.
 
-Search the official brand website or trusted supplement retailers. Return the exact label values.`
+Return format:
+{
+    "name": "Product Name",
+    "brand": "Brand Name", 
+    "servingSize": "1 scoop (10g)",
+    "calories": 0,
+    "protein": 0,
+    "carbs": 0,
+    "fat": 0,
+    "micronutrients": {
+        "vitaminC": {"amount": 100, "unit": "mg"},
+        "caffeine": {"amount": 200, "unit": "mg"}
+    }
+}
+
+Only include micronutrients that are actually on the label. Return ONLY valid JSON, no other text.`
             }]
         });
         
-        // Extract text from response (may have multiple content blocks from web search)
+        // Extract JSON from response
         let fullText = '';
         for (const block of message.content) {
             if (block.type === 'text') {
-                fullText += block.text + '\n';
+                fullText += block.text;
             }
         }
         
-        console.log('Supplement search result length:', fullText.length);
-        // Truncate to avoid rate limits - keep most relevant info
-        if (fullText.length > 1500) {
-            fullText = fullText.substring(0, 1500) + '...';
+        // Try to parse JSON
+        const jsonMatch = fullText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            const data = JSON.parse(jsonMatch[0]);
+            return {
+                source: 'web_search',
+                sourceId: null,
+                name: data.name || query,
+                brand: data.brand,
+                servingSize: data.servingSize,
+                nutrition: {
+                    calories: data.calories || 0,
+                    protein: data.protein || 0,
+                    carbs: data.carbs || 0,
+                    fat: data.fat || 0
+                },
+                micronutrients: data.micronutrients || {}
+            };
         }
-        return fullText;
     } catch (error) {
-        console.error('Supplement search error:', error.message);
-        return null;
+        console.error('Web search error:', error.message);
     }
+    return null;
+}
+
+// Main nutrition lookup function
+async function lookupNutrition(input) {
+    // 1. Check cache first
+    const cached = await checkNutritionCache(input);
+    if (cached) {
+        return {
+            source: cached.source,
+            sourceId: cached.source_id,
+            category: cached.category,
+            nutrition: cached.nutrition_data,
+            micronutrients: cached.micronutrients,
+            fromCache: true
+        };
+    }
+    
+    // 2. Classify input
+    const category = await classifyInput(input);
+    
+    let result = null;
+    
+    if (category === 'supplement') {
+        // 3a. Try NIH DSLD first for supplements
+        result = await searchNIHDSLD(input);
+        
+        // 3b. Fall back to web search if not found
+        if (!result) {
+            result = await searchSupplementWeb(input);
+        }
+    } else {
+        // 3c. Use USDA for whole foods
+        result = await searchUSDA(input);
+    }
+    
+    // 4. Cache the result if found
+    if (result) {
+        await saveToNutritionCache(
+            input,
+            category,
+            result.source,
+            result.sourceId,
+            result.nutrition,
+            result.micronutrients
+        );
+    }
+    
+    return result ? { ...result, category, fromCache: false } : null;
 }
 // ═══════════════════════════════════════════════════════════════
 // HEALTH CHECK
@@ -353,112 +609,115 @@ app.post('/api/ai/parse', authenticateToken, async (req, res) => {
         const { input } = req.body;
         if (!input) return res.status(400).json({ error: 'Input required' });
 
-        // Check if this looks like food/supplement input
-        const foodKeywords = ['ate', 'had', 'eat', 'breakfast', 'lunch', 'dinner', 'snack', 'calories', 'protein', 'chicken', 'rice', 'egg', 'salad', 'sandwich', 'pizza', 'burger', 'fruit', 'vegetable', 'drink', 'coffee', 'shake', 'scoop', 'serving'];
-        const looksLikeFood = foodKeywords.some(kw => input.toLowerCase().includes(kw)) || 
-                             !input.toLowerCase().match(/bench|squat|deadlift|press|curl|row|run|walk|bike|swim|cardio|sets|reps|lbs|kg/);
+        // Check if this is a workout/cardio/weight input (not food)
+        const isWorkout = input.toLowerCase().match(/bench|squat|deadlift|press|curl|row|pull|push|sets|reps|lbs|kg|\d+x\d+/);
+        const isCardio = input.toLowerCase().match(/run|ran|walk|walked|bike|biked|swim|swam|cardio|miles|minutes|km/);
+        const isWeight = input.toLowerCase().match(/^(weigh|weight|i weigh|weighed)\s*\d/i);
 
-        let nutritionContext = '';
-        let isSupplement = false;
-
-        if (looksLikeFood) {
-            // Check if it's a supplement/brand first
-            if (isSupplementBrand(input)) {
-                isSupplement = true;
-                console.log('Detected supplement, using web search...');
-                const supplementData = await searchSupplementInfo(input);
-                if (supplementData) {
-                    nutritionContext = `\n\nSUPPLEMENT LABEL DATA (from web search):\n${supplementData}\n\nUse this official supplement label data for accurate nutrition values.`;
-                }
-            } 
-            // Fall back to USDA for regular foods
-            else if (process.env.USDA_API_KEY) {
-                try {
-                    const usdaData = await searchUSDA(input);
-                    if (usdaData) {
-                        nutritionContext = `\n\nUSDA Reference Data:\n${usdaData}\n\nUse this official USDA data to provide accurate nutrition values.`;
-                    }
-                } catch (e) {
-                    console.log('USDA lookup failed:', e.message);
-                }
-            }
-        }
-
-        const message = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 2048,
-            messages: [{ role: 'user', content: `Parse this fitness/nutrition input and return JSON only (no markdown):
+        // For workouts, cardio, weight - use simple AI parse (no nutrition lookup)
+        if (isWorkout || isCardio || isWeight) {
+            const message = await anthropic.messages.create({
+                model: 'claude-sonnet-4-20250514',
+                max_tokens: 1024,
+                messages: [{ role: 'user', content: `Parse this fitness input and return JSON only (no markdown):
 Input: "${input}"
-${nutritionContext}
 
 Return one of these formats:
-
-For food/supplements: {
-  "type": "food",
-  "data": {
-    "items": [{
-      "name": "food name",
-      "calories": 0,
-      "protein": 0,
-      "carbs": 0,
-      "fat": 0,
-      "fiber": 0,
-      "sugar": 0,
-      "sodium": 0
-    }],
-    "totals": {
-      "calories": 0,
-      "protein": 0,
-      "carbs": 0,
-      "fat": 0
-    },
-    "micronutrients": {
-      "vitaminA": 0,
-      "vitaminC": 0,
-      "vitaminD": 0,
-      "vitaminE": 0,
-      "vitaminK": 0,
-      "vitaminB6": 0,
-      "vitaminB12": 0,
-      "thiamin": 0,
-      "riboflavin": 0,
-      "niacin": 0,
-      "folate": 0,
-      "calcium": 0,
-      "iron": 0,
-      "magnesium": 0,
-      "zinc": 0,
-      "potassium": 0,
-      "phosphorus": 0,
-      "sodium": 0,
-      "caffeine": 0,
-      "creatine": 0,
-      "betaAlanine": 0,
-      "citrulline": 0
-    },
-    "mealType": "breakfast|lunch|dinner|snack|supplement"
-  },
-  "isSupplement": ${isSupplement},
-  "dataSource": "${isSupplement ? 'web_search' : (nutritionContext ? 'usda' : 'estimate')}"
-}
-
 For workout: {"type":"workout","data":{"exercises":[{"name":"exercise name","weight":0,"sets":0,"reps":0,"category":"chest|back|shoulders|arms|legs|core"}]}}
 For cardio: {"type":"cardio","data":{"activity":"activity name","duration":0,"distance":0,"calories":0}}
 For weight: {"type":"weight","data":{"weight":0,"unit":"lbs"}}
 
-IMPORTANT: Only include micronutrients that have actual values > 0. Use exact values from the nutrition data provided. Return ONLY valid JSON.` }]
+Return ONLY valid JSON.` }]
+            });
+
+            const text = message.content[0].text;
+            const result = JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
+            return res.json({ result });
+        }
+
+        // For food/supplements - use nutrition lookup system
+        const nutritionData = await lookupNutrition(input);
+        
+        // Build context for AI
+        let nutritionContext = '';
+        if (nutritionData) {
+            nutritionContext = `
+Nutrition data found (source: ${nutritionData.source}, cached: ${nutritionData.fromCache}):
+Name: ${nutritionData.name || input}
+Category: ${nutritionData.category}
+Calories: ${nutritionData.nutrition?.calories || 0}
+Protein: ${nutritionData.nutrition?.protein || 0}g
+Carbs: ${nutritionData.nutrition?.carbs || 0}g
+Fat: ${nutritionData.nutrition?.fat || 0}g
+Micronutrients: ${JSON.stringify(nutritionData.micronutrients || {})}
+
+Use this data to provide accurate nutrition values.`;
+        }
+
+        const message = await anthropic.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1500,
+            messages: [{ role: 'user', content: `Parse this food/supplement input and return JSON only (no markdown):
+Input: "${input}"
+${nutritionContext}
+
+Return this format:
+{
+    "type": "food",
+    "data": {
+        "items": [{
+            "name": "item name",
+            "calories": 0,
+            "protein": 0,
+            "carbs": 0,
+            "fat": 0,
+            "fiber": 0,
+            "sugar": 0,
+            "sodium": 0
+        }],
+        "totals": {
+            "calories": 0,
+            "protein": 0,
+            "carbs": 0,
+            "fat": 0
+        },
+        "micronutrients": {
+            "vitaminA": 0,
+            "vitaminC": 0,
+            "vitaminD": 0,
+            "vitaminB6": 0,
+            "vitaminB12": 0,
+            "calcium": 0,
+            "iron": 0,
+            "magnesium": 0,
+            "zinc": 0,
+            "potassium": 0,
+            "caffeine": 0,
+            "creatine": 0
+        },
+        "mealType": "breakfast|lunch|dinner|snack|supplement"
+    },
+    "source": "${nutritionData?.source || 'estimate'}",
+    "cached": ${nutritionData?.fromCache || false}
+}
+
+IMPORTANT: 
+- Only include micronutrients with values > 0
+- For micronutrients with amount/unit objects, convert to just the numeric amount
+- Use the provided nutrition data for accuracy
+- Return ONLY valid JSON` }]
         });
 
         const text = message.content[0].text;
         const result = JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
+        
         console.log('Parse result:', JSON.stringify(result, null, 2));
-res.json({ result });
+        res.json({ result });
     } catch (error) {
         console.error('AI parse error:', error);
         res.status(500).json({ error: 'Failed to parse input' });
     }
 });
-
 app.post('/api/ai/photo', authenticateToken, async (req, res) => {
     try {
         const { image, mimeType } = req.body;
