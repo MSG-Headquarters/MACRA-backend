@@ -451,7 +451,8 @@ IMPORTANT: Only include micronutrients that have actual values > 0. Use exact va
 
         const text = message.content[0].text;
         const result = JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
-        res.json({ result });
+        console.log('Parse result:', JSON.stringify(result, null, 2));
+res.json({ result });
     } catch (error) {
         console.error('AI parse error:', error);
         res.status(500).json({ error: 'Failed to parse input' });
