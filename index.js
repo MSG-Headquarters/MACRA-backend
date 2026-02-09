@@ -615,6 +615,228 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// USER DISCOVERY SYSTEM
+// ═══════════════════════════════════════════════════════════════
+
+// Discover random public users to follow
+app.get('/api/users/discover', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const limit = parseInt(req.query.limit) || 3;
+        
+        // Get user's current following list
+        const { data: userData } = await supabase
+            .from('users')
+            .select('following')
+            .eq('id', userId)
+            .single();
+        
+        const following = userData?.following || [];
+        
+        // Get random public users excluding self and already following
+        const { data: users, error } = await supabase
+            .from('users')
+            .select('id, name, athlete_code, bio, total_workouts, current_streak, is_public')
+            .eq('is_public', true)
+            .neq('id', userId)
+            .limit(20); // Get more than needed so we can filter and randomize
+        
+        if (error) throw error;
+        
+        // Filter out already following and randomize
+        const notFollowing = (users || []).filter(u => !following.includes(u.id));
+        const shuffled = notFollowing.sort(() => Math.random() - 0.5);
+        const selected = shuffled.slice(0, limit);
+        
+        // Format response
+        const formatted = selected.map(u => ({
+            id: u.id,
+            name: u.name || 'Athlete',
+            athleteCode: u.athlete_code,
+            bio: u.bio || '',
+            avatar: (u.name || 'A')[0].toUpperCase(),
+            stats: {
+                workouts: u.total_workouts || 0,
+                streak: u.current_streak || 0
+            },
+            isPublic: u.is_public
+        }));
+        
+        res.json({ users: formatted });
+    } catch (error) {
+        console.error('Discover error:', error);
+        res.status(500).json({ error: 'Failed to discover users' });
+    }
+});
+
+// Get public profile by athlete code
+app.get('/api/users/profile/:athleteCode', authenticateToken, async (req, res) => {
+    try {
+        const { athleteCode } = req.params;
+        
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('id, name, athlete_code, bio, total_workouts, current_streak, is_public, created_at')
+            .eq('athlete_code', athleteCode)
+            .single();
+        
+        if (error || !user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        // If private, return limited info
+        if (!user.is_public) {
+            return res.json({
+                profile: {
+                    athleteCode: user.athlete_code,
+                    name: user.name || 'Athlete',
+                    avatar: (user.name || 'A')[0].toUpperCase(),
+                    isPublic: false,
+                    message: 'This profile is private'
+                }
+            });
+        }
+        
+        // Return full public profile
+        res.json({
+            profile: {
+                id: user.id,
+                athleteCode: user.athlete_code,
+                name: user.name || 'Athlete',
+                bio: user.bio || '',
+                avatar: (user.name || 'A')[0].toUpperCase(),
+                stats: {
+                    workouts: user.total_workouts || 0,
+                    streak: user.current_streak || 0
+                },
+                isPublic: true,
+                memberSince: user.created_at
+            }
+        });
+    } catch (error) {
+        console.error('Profile fetch error:', error);
+        res.status(500).json({ error: 'Failed to fetch profile' });
+    }
+});
+
+// Follow a user by athlete code
+app.post('/api/users/follow', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { athleteCode } = req.body;
+        
+        if (!athleteCode) {
+            return res.status(400).json({ error: 'Athlete code required' });
+        }
+        
+        // Find the user to follow
+        const { data: targetUser, error: findError } = await supabase
+            .from('users')
+            .select('id, name, athlete_code')
+            .eq('athlete_code', athleteCode)
+            .single();
+        
+        if (findError || !targetUser) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        if (targetUser.id === userId) {
+            return res.status(400).json({ error: "You can't follow yourself" });
+        }
+        
+        // Get current following list
+        const { data: userData } = await supabase
+            .from('users')
+            .select('following')
+            .eq('id', userId)
+            .single();
+        
+        const following = userData?.following || [];
+        
+        if (following.includes(targetUser.id)) {
+            return res.status(400).json({ error: 'Already following this user' });
+        }
+        
+        // Add to following list
+        following.push(targetUser.id);
+        
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ following })
+            .eq('id', userId);
+        
+        if (updateError) throw updateError;
+        
+        res.json({ 
+            success: true, 
+            message: `Now following ${targetUser.name}`,
+            user: {
+                id: targetUser.id,
+                name: targetUser.name,
+                athleteCode: targetUser.athlete_code
+            }
+        });
+    } catch (error) {
+        console.error('Follow error:', error);
+        res.status(500).json({ error: 'Failed to follow user' });
+    }
+});
+
+// Unfollow a user
+app.post('/api/users/unfollow', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { targetUserId } = req.body;
+        
+        if (!targetUserId) {
+            return res.status(400).json({ error: 'Target user ID required' });
+        }
+        
+        // Get current following list
+        const { data: userData } = await supabase
+            .from('users')
+            .select('following')
+            .eq('id', userId)
+            .single();
+        
+        let following = userData?.following || [];
+        following = following.filter(id => id !== targetUserId);
+        
+        const { error: updateError } = await supabase
+            .from('users')
+            .update({ following })
+            .eq('id', userId);
+        
+        if (updateError) throw updateError;
+        
+        res.json({ success: true, message: 'Unfollowed successfully' });
+    } catch (error) {
+        console.error('Unfollow error:', error);
+        res.status(500).json({ error: 'Failed to unfollow user' });
+    }
+});
+
+// Update profile visibility
+app.post('/api/users/privacy', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { isPublic } = req.body;
+        
+        const { error } = await supabase
+            .from('users')
+            .update({ is_public: isPublic })
+            .eq('id', userId);
+        
+        if (error) throw error;
+        
+        res.json({ success: true, isPublic });
+    } catch (error) {
+        console.error('Privacy update error:', error);
+        res.status(500).json({ error: 'Failed to update privacy' });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════
 // AI PARSING ROUTES
 // ═══════════════════════════════════════════════════════════════
 
@@ -736,7 +958,7 @@ IMPORTANT:
 - If NO date is mentioned, set "logDate" to null
 - Return ONLY valid JSON` }]
         });
-        
+
         const text = message.content[0].text;
         const result = JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
         
