@@ -200,6 +200,10 @@ Search the official brand website or trusted supplement retailers. Return the ex
         }
         
         console.log('Supplement search result length:', fullText.length);
+        // Truncate to avoid rate limits - keep most relevant info
+        if (fullText.length > 1500) {
+            fullText = fullText.substring(0, 1500) + '...';
+        }
         return fullText;
     } catch (error) {
         console.error('Supplement search error:', error.message);
