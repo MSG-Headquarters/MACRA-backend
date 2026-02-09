@@ -81,38 +81,42 @@ async function authenticateToken(req, res, next) {
 // ═══════════════════════════════════════════════════════════════
 
 async function searchUSDA(query, maxResults = 3) {
-    if (!process.env.USDA_API_KEY) return null;
-    
+    console.log('USDA lookup for:', query);
+    if (!process.env.USDA_API_KEY) {
+        console.log('No USDA API key found');
+        return null;
+    }
     try {
+        console.log('Fetching from USDA...');
         const response = await fetch(
             `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${process.env.USDA_API_KEY}&query=${encodeURIComponent(query)}&pageSize=${maxResults}&dataType=Foundation,SR%20Legacy`
         );
-        
-        if (!response.ok) return null;
-        
+        if (!response.ok) {
+            console.log('USDA response not ok:', response.status);
+            return null;
+        }
         const data = await response.json();
+        console.log('USDA found', data.foods?.length || 0, 'foods');
         if (!data.foods || data.foods.length === 0) return null;
-        
-        return data.foods.map(food => {
+        const result = data.foods.map(food => {
             const nutrients = food.foodNutrients || [];
             const find = (name) => {
                 const n = nutrients.find(n => (n.nutrientName || '').toLowerCase().includes(name));
                 return n?.value || 0;
             };
-            
             const cal = Math.round(find('energy'));
             const pro = Math.round(find('protein'));
             const carb = Math.round(find('carbohydrate'));
             const fat = Math.round(find('total lipid') || find('fat'));
-            
             return `${food.description}: ${cal} cal, ${pro}g protein, ${carb}g carbs, ${fat}g fat per 100g`;
         }).join('\n');
+        console.log('USDA data:', result.substring(0, 100));
+        return result;
     } catch (error) {
-        console.error('USDA API error:', error);
+        console.error('USDA API error:', error.message);
         return null;
     }
 }
-
 // ═══════════════════════════════════════════════════════════════
 // HEALTH CHECK
 // ═══════════════════════════════════════════════════════════════
