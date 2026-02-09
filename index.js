@@ -512,6 +512,25 @@ app.post('/api/v2/workout/finalize', authenticateToken, async (req, res) => {
     }
 });
 
+app.post('/api/v2/workout/cancel', authenticateToken, async (req, res) => {
+    try {
+        const { session_id } = req.body;
+        
+        // Delete the workout session
+        await supabase
+            .from('workout_sessions')
+            .delete()
+            .eq('id', session_id)
+            .eq('user_id', req.user.userId)
+            .eq('status', 'active');
+        
+        res.json({ success: true, message: 'Workout cancelled' });
+    } catch (error) {
+        console.error('Cancel workout error:', error);
+        res.status(500).json({ error: 'Failed to cancel workout' });
+    }
+});
+
 // ═══════════════════════════════════════════════════════════════
 // V2 NUTRITION ROUTES
 // ═══════════════════════════════════════════════════════════════
