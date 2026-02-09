@@ -77,6 +77,43 @@ async function authenticateToken(req, res, next) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// USDA FOODDATA CENTRAL
+// ═══════════════════════════════════════════════════════════════
+
+async function searchUSDA(query, maxResults = 3) {
+    if (!process.env.USDA_API_KEY) return null;
+    
+    try {
+        const response = await fetch(
+            `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${process.env.USDA_API_KEY}&query=${encodeURIComponent(query)}&pageSize=${maxResults}&dataType=Foundation,SR%20Legacy`
+        );
+        
+        if (!response.ok) return null;
+        
+        const data = await response.json();
+        if (!data.foods || data.foods.length === 0) return null;
+        
+        return data.foods.map(food => {
+            const nutrients = food.foodNutrients || [];
+            const find = (name) => {
+                const n = nutrients.find(n => (n.nutrientName || '').toLowerCase().includes(name));
+                return n?.value || 0;
+            };
+            
+            const cal = Math.round(find('energy'));
+            const pro = Math.round(find('protein'));
+            const carb = Math.round(find('carbohydrate'));
+            const fat = Math.round(find('total lipid') || find('fat'));
+            
+            return `${food.description}: ${cal} cal, ${pro}g protein, ${carb}g carbs, ${fat}g fat per 100g`;
+        }).join('\n');
+    } catch (error) {
+        console.error('USDA API error:', error);
+        return null;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // HEALTH CHECK
 // ═══════════════════════════════════════════════════════════════
 
@@ -218,22 +255,40 @@ app.post('/api/ai/parse', authenticateToken, async (req, res) => {
     try {
         const { input } = req.body;
         if (!input) return res.status(400).json({ error: 'Input required' });
-        
+
+        // Check if this looks like food input
+        const foodKeywords = ['ate', 'had', 'eat', 'breakfast', 'lunch', 'dinner', 'snack', 'calories', 'protein', 'chicken', 'rice', 'egg', 'salad', 'sandwich', 'pizza', 'burger', 'fruit', 'vegetable', 'drink', 'coffee', 'shake'];
+        const looksLikeFood = foodKeywords.some(kw => input.toLowerCase().includes(kw)) || 
+                             !input.toLowerCase().match(/bench|squat|deadlift|press|curl|row|run|walk|bike|swim|cardio|sets|reps|lbs|kg/);
+
+        // Build USDA context if it looks like food
+        let usdaContext = '';
+        if (looksLikeFood && process.env.USDA_API_KEY) {
+            try {
+                const usdaData = await searchUSDA(input);
+                if (usdaData) {
+                    usdaContext = `\n\nUSDA Reference Data:\n${usdaData}\n\nUse this official USDA data to provide accurate nutrition values.`;
+                }
+            } catch (e) {
+                console.log('USDA lookup failed:', e.message);
+            }
+        }
+
         const message = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',
             max_tokens: 1024,
             messages: [{ role: 'user', content: `Parse this fitness/nutrition input and return JSON only (no markdown):
 Input: "${input}"
-
+${usdaContext}
 Return one of these formats:
-For food: {"type":"food","data":{"items":[{"name":"food name","calories":0,"protein":0,"carbs":0,"fat":0}],"totals":{"calories":0,"protein":0,"carbs":0,"fat":0},"mealType":"breakfast|lunch|dinner|snack"}}
+For food: {"type":"food","data":{"items":[{"name":"food name","calories":0,"protein":0,"carbs":0,"fat":0}],"totals":{"calories":0,"protein":0,"carbs":0,"fat":0},"mealType":"breakfast|lunch|dinner|snack"},"usdaEnhanced":${usdaContext ? 'true' : 'false'}}
 For workout: {"type":"workout","data":{"exercises":[{"name":"exercise name","weight":0,"sets":0,"reps":0,"category":"chest|back|shoulders|arms|legs|core"}]}}
 For cardio: {"type":"cardio","data":{"activity":"activity name","duration":0,"distance":0,"calories":0}}
 For weight: {"type":"weight","data":{"weight":0,"unit":"lbs"}}
 
 Be accurate with nutrition estimates. Return ONLY valid JSON.` }]
         });
-        
+
         const text = message.content[0].text;
         const result = JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
         res.json({ result });
