@@ -199,8 +199,10 @@ async function searchNIHDSLD(query) {
     console.log('NIH DSLD lookup for:', query);
     
     try {
-        // Search for products
-        const searchUrl = `https://api.ods.od.nih.gov/dsld/v9/browse-products?q=${encodeURIComponent(query)}&size=5`;
+        // Use search-filter endpoint - searches across all label fields
+        const searchUrl = `https://api.ods.od.nih.gov/dsld/v9/search-filter?q=${encodeURIComponent(query)}&size=5`;
+        console.log('NIH DSLD URL:', searchUrl);
+        
         const searchResponse = await fetch(searchUrl);
         
         if (!searchResponse.ok) {
@@ -215,23 +217,29 @@ async function searchNIHDSLD(query) {
             return null;
         }
         
-        // Get the first matching product's full label
-        const productId = searchData.hits[0].dsld_id;
-        console.log('NIH DSLD found product ID:', productId);
+        // Get the first matching product's ID from _source
+        const firstHit = searchData.hits[0];
+        const productId = firstHit._id || firstHit._source?.id;
+        const productName = firstHit._source?.fullName || query;
+        const brandName = firstHit._source?.brandName;
         
+        console.log('NIH DSLD found:', productName, '- ID:', productId);
+        
+        // Get the full label with ingredients
         const labelUrl = `https://api.ods.od.nih.gov/dsld/v9/label/${productId}`;
         const labelResponse = await fetch(labelUrl);
         
         if (!labelResponse.ok) {
-            console.log('NIH DSLD label fetch failed');
+            console.log('NIH DSLD label fetch failed:', labelResponse.status);
             return null;
         }
         
         const labelData = await labelResponse.json();
         
-        // Extract nutrition from label
-        const ingredients = labelData.ingredients || [];
-        const servingSize = labelData.serving_size || '1 serving';
+        // Extract nutrition from ingredientRows
+        const ingredients = labelData.ingredientRows || [];
+        const servingSize = labelData.servingSizes?.[0];
+        const servingSizeText = servingSize ? `${servingSize.minQuantity} ${servingSize.unit}` : '1 serving';
         
         // Build micronutrients from ingredients
         const micronutrients = {};
@@ -243,21 +251,27 @@ async function searchNIHDSLD(query) {
             'cholecalciferol': 'vitaminD',
             'vitamin e': 'vitaminE',
             'vitamin k': 'vitaminK',
+            'vitamin b-6': 'vitaminB6',
             'vitamin b6': 'vitaminB6',
             'pyridoxine': 'vitaminB6',
+            'vitamin b-12': 'vitaminB12',
             'vitamin b12': 'vitaminB12',
             'cobalamin': 'vitaminB12',
             'cyanocobalamin': 'vitaminB12',
             'thiamin': 'thiamin',
+            'thiamine': 'thiamin',
+            'vitamin b-1': 'thiamin',
             'vitamin b1': 'thiamin',
             'riboflavin': 'riboflavin',
+            'vitamin b-2': 'riboflavin',
             'vitamin b2': 'riboflavin',
             'niacin': 'niacin',
+            'vitamin b-3': 'niacin',
             'vitamin b3': 'niacin',
             'folate': 'folate',
             'folic acid': 'folate',
             'biotin': 'biotin',
-            'pantothenic': 'pantothenicAcid',
+            'pantothenic acid': 'pantothenicAcid',
             'calcium': 'calcium',
             'iron': 'iron',
             'magnesium': 'magnesium',
@@ -284,9 +298,10 @@ async function searchNIHDSLD(query) {
         };
         
         for (const ingredient of ingredients) {
-            const name = (ingredient.ingredient_name || '').toLowerCase();
-            const amount = parseFloat(ingredient.ingredient_amount) || 0;
-            const unit = ingredient.ingredient_unit || '';
+            const name = (ingredient.name || '').toLowerCase();
+            const quantity = ingredient.quantity?.[0];
+            const amount = quantity?.quantity || 0;
+            const unit = quantity?.unit || '';
             
             for (const [key, nutrientKey] of Object.entries(nutritionMap)) {
                 if (name.includes(key)) {
@@ -304,11 +319,11 @@ async function searchNIHDSLD(query) {
         return {
             source: 'nih_dsld',
             sourceId: productId.toString(),
-            name: labelData.product_name || searchData.hits[0].product_name,
-            brand: labelData.brand_name,
-            servingSize: servingSize,
+            name: labelData.fullName || productName,
+            brand: labelData.brandName || brandName,
+            servingSize: servingSizeText,
             nutrition: {
-                calories: 0, // Supplements typically don't have calories
+                calories: 0,
                 protein: 0,
                 carbs: 0,
                 fat: 0
@@ -320,7 +335,6 @@ async function searchNIHDSLD(query) {
         return null;
     }
 }
-
 // AI classification: is this food or supplement?
 async function classifyInput(input) {
     try {
@@ -616,22 +630,29 @@ app.post('/api/ai/parse', authenticateToken, async (req, res) => {
 
         // For workouts, cardio, weight - use simple AI parse (no nutrition lookup)
         if (isWorkout || isCardio || isWeight) {
+            const today = new Date().toISOString();
+            
             const message = await anthropic.messages.create({
                 model: 'claude-sonnet-4-20250514',
                 max_tokens: 1024,
                 messages: [{ role: 'user', content: `Parse this fitness input and return JSON only (no markdown):
 Input: "${input}"
+Today's date: ${today}
+
+IMPORTANT: Check if the input contains a date reference (like "2/4/26", "Feb 4", "yesterday", "last Monday", "3 days ago"). If so, calculate the actual date and include it as "logDate" in ISO format.
 
 Return one of these formats:
-For workout: {"type":"workout","data":{"exercises":[{"name":"exercise name","weight":0,"sets":0,"reps":0,"category":"chest|back|shoulders|arms|legs|core"}]}}
-For cardio: {"type":"cardio","data":{"activity":"activity name","duration":0,"distance":0,"calories":0}}
-For weight: {"type":"weight","data":{"weight":0,"unit":"lbs"}}
+For workout: {"type":"workout","data":{"exercises":[{"name":"exercise name","weight":0,"sets":0,"reps":0,"category":"chest|back|shoulders|arms|legs|core"}]},"logDate":"2026-02-04T12:00:00.000Z"}
+For cardio: {"type":"cardio","data":{"activity":"activity name","duration":0,"distance":0,"calories":0},"logDate":"2026-02-04T12:00:00.000Z"}
+For weight: {"type":"weight","data":{"weight":0,"unit":"lbs"},"logDate":"2026-02-04T12:00:00.000Z"}
 
+If NO date is mentioned in the input, set "logDate" to null.
 Return ONLY valid JSON.` }]
             });
 
             const text = message.content[0].text;
             const result = JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
+            console.log('Parse result with date:', JSON.stringify(result));
             return res.json({ result });
         }
 
@@ -654,12 +675,17 @@ Micronutrients: ${JSON.stringify(nutritionData.micronutrients || {})}
 Use this data to provide accurate nutrition values.`;
         }
 
+        const today = new Date().toISOString();
+        
         const message = await anthropic.messages.create({
             model: 'claude-sonnet-4-20250514',
             max_tokens: 1500,
             messages: [{ role: 'user', content: `Parse this food/supplement input and return JSON only (no markdown):
 Input: "${input}"
+Today's date: ${today}
 ${nutritionContext}
+
+IMPORTANT: Check if the input contains a date reference (like "2/4/26", "Feb 4", "yesterday", "last Monday", "3 days ago"). If so, calculate the actual date and include it as "logDate" in ISO format.
 
 Return this format:
 {
@@ -698,16 +724,19 @@ Return this format:
         "mealType": "breakfast|lunch|dinner|snack|supplement"
     },
     "source": "${nutritionData?.source || 'estimate'}",
-    "cached": ${nutritionData?.fromCache || false}
+    "cached": ${nutritionData?.fromCache || false},
+    "logDate": null
 }
 
-IMPORTANT: 
+IMPORTANT:
 - Only include micronutrients with values > 0
 - For micronutrients with amount/unit objects, convert to just the numeric amount
 - Use the provided nutrition data for accuracy
+- If a date is mentioned, set "logDate" to the ISO date string (e.g., "2026-02-04T12:00:00.000Z")
+- If NO date is mentioned, set "logDate" to null
 - Return ONLY valid JSON` }]
         });
-
+        
         const text = message.content[0].text;
         const result = JSON.parse(text.replace(/```json\n?|\n?```/g, '').trim());
         
