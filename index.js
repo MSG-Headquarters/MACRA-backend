@@ -873,7 +873,8 @@ Today's date: ${today}
 IMPORTANT: Check if the input contains a date reference (like "2/4/26", "Feb 4", "yesterday", "last Monday", "3 days ago"). If so, calculate the actual date and include it as "logDate" in ISO format.
 
 Return one of these formats:
-For workout: {"type":"workout","data":{"exercises":[{"name":"exercise name","weight":0,"sets":0,"reps":0,"category":"chest|back|shoulders|arms|legs|core"}]},"logDate":"2026-02-04T12:00:00.000Z"}
+For workout: {"type":"workout","data":{"exercises":[{"name":"exercise name","weight":135,"reps":10,"setNumber":1,"category":"chest|back|shoulders|arms|legs|core"}]},"logDate":"2026-02-04T12:00:00.000Z"}
+CRITICAL: Each LINE of input = ONE entry in exercises array. NEVER combine or sum reps. "bench 135x10" on 3 lines = 3 entries each with reps:10, NOT 1 entry with reps:30.
 For cardio: {"type":"cardio","data":{"activity":"activity name","duration":0,"distance":0,"calories":0},"logDate":"2026-02-04T12:00:00.000Z"}
 For weight: {"type":"weight","data":{"weight":0,"unit":"lbs"},"logDate":"2026-02-04T12:00:00.000Z"}
 
@@ -1621,6 +1622,7 @@ app.post('/api/v2/learning/predict-next', authenticateToken, async (req, res) =>
 app.listen(PORT, () => {
     console.log(`🚀 MACRA Backend v2.0 running on port ${PORT}`);
 });
+
 
 
 
