@@ -613,15 +613,102 @@ app.post('/api/auth/logout', (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/auth/forgot-password', async (req, res) => {
+aapp.post('/api/auth/forgot-password', async (req, res) => {
     try {
         const { email } = req.body;
-        // In production, send actual email
+        if (!email) return res.status(400).json({ error: 'Email required' });
+
+        // Use Supabase Auth's built-in password reset
+        const { error } = await supabase.auth.resetPasswordForEmail(email.toLowerCase(), {
+            redirectTo: 'https://macra.umbrassi.com/reset-password'
+        });
+
+        if (error) {
+            console.error('Password reset error:', error);
+        }
+
+        // Always return success (don't reveal if email exists)
         res.json({ success: true, message: 'If account exists, reset email sent' });
     } catch (error) {
+        console.error('Forgot password error:', error);
         res.status(500).json({ error: 'Failed to process request' });
     }
 });
+
+// Admin: Reset a user's password directly (protected by admin secret)
+app.post('/api/admin/reset-password', async (req, res) => {
+    try {
+        const { email, newPassword, adminKey } = req.body;
+        if (adminKey !== process.env.ADMIN_KEY) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!email || !newPassword) {
+            return res.status(400).json({ error: 'Email and new password required' });
+        }
+
+        // Find user by email
+        const { data: users } = await supabase.from('users').select('id').eq('email', email.toLowerCase()).single();
+        if (!users) return res.status(404).json({ error: 'User not found' });
+
+        // Update password via Supabase Admin API
+        const { error } = await supabase.auth.admin.updateUserById(users.id, {
+            password: newPassword
+        });
+
+        if (error) throw error;
+        console.log('Password reset for:', email);
+        res.json({ success: true, message: `Password reset for ${email}` });
+    } catch (error) {
+        console.error('Admin reset error:', error);
+        res.status(500).json({ error: 'Failed to reset password' });
+    }
+});
+
+// Get list of users the authenticated user is following
+app.get('/api/users/following', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.userId;
+
+        // Get current user's following list
+        const { data: userData } = await supabase
+            .from('users')
+            .select('following')
+            .eq('id', userId)
+            .single();
+
+        const followingIds = userData?.following || [];
+
+        if (followingIds.length === 0) {
+            return res.json({ following: [] });
+        }
+
+        // Fetch profiles of followed users
+        const { data: users, error } = await supabase
+            .from('users')
+            .select('id, name, athlete_code, bio, total_workouts, current_streak, is_public')
+            .in('id', followingIds);
+
+        if (error) throw error;
+
+        const following = (users || []).map(u => ({
+            id: u.id,
+            name: u.name || 'Athlete',
+            athleteCode: u.athlete_code,
+            bio: u.bio || '',
+            avatar: (u.name || 'A')[0].toUpperCase(),
+            stats: {
+                workouts: u.total_workouts || 0,
+                streak: u.current_streak || 0
+            }
+        }));
+
+        res.json({ following });
+    } catch (error) {
+        console.error('Get following error:', error);
+        res.status(500).json({ error: 'Failed to get following list' });
+    }
+});
+
 
 // ═══════════════════════════════════════════════════════════════
 // USER DISCOVERY SYSTEM
