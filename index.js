@@ -771,6 +771,42 @@ app.get('/api/users/following', authenticateToken, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // USER DISCOVERY SYSTEM
 // ═══════════════════════════════════════════════════════════════
+// Search users by name
+app.get('/api/users/search', authenticateToken, async (req, res) => {
+    try {
+        const query = req.query.q;
+        if (!query || query.length < 2) {
+            return res.status(400).json({ error: 'Search query must be at least 2 characters' });
+        }
+
+        const { data: users, error } = await supabase
+            .from('users')
+            .select('id, name, athlete_code, bio, total_workouts, current_streak, is_public')
+            .eq('is_public', true)
+            .ilike('name', `%${query}%`)
+            .neq('id', req.user.userId)
+            .limit(10);
+
+        if (error) throw error;
+
+        const formatted = (users || []).map(u => ({
+            id: u.id,
+            name: u.name || 'Athlete',
+            athleteCode: u.athlete_code,
+            bio: u.bio || '',
+            avatar: (u.name || 'A')[0].toUpperCase(),
+            stats: {
+                workouts: u.total_workouts || 0,
+                streak: u.current_streak || 0
+            }
+        }));
+
+        res.json({ users: formatted });
+    } catch (error) {
+        console.error('Search error:', error);
+        res.status(500).json({ error: 'Search failed' });
+    }
+});
 
 // Discover random public users to follow
 app.get('/api/users/discover', authenticateToken, async (req, res) => {
