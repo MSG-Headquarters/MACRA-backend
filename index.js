@@ -576,7 +576,23 @@ app.post('/api/auth/login', async (req, res) => {
         }
         
         // Get user profile from users table
-        const { data: profile } = await supabase.from('users').select('*').eq('id', data.user.id).single();
+        const { data: profile, error: profileError } = await supabase.from('users').select('*').eq('id', data.user.id).single();
+        
+        if (profileError) {
+            console.log('Profile lookup by ID failed:', profileError.message, '- trying email fallback');
+        }
+        
+        // Fallback: lookup by email if ID lookup failed
+        let userProfile = profile;
+        if (!userProfile) {
+            const { data: emailProfile } = await supabase.from('users').select('*').eq('email', email.toLowerCase()).single();
+            userProfile = emailProfile;
+            // If found by email but ID doesn't match, update the ID
+            if (userProfile && userProfile.id !== data.user.id) {
+                console.log('Updating user ID from', userProfile.id, 'to', data.user.id);
+                await supabase.from('users').update({ id: data.user.id }).eq('email', email.toLowerCase());
+            }
+        }
         
         res.json({
             token: data.session.access_token,
@@ -584,9 +600,9 @@ app.post('/api/auth/login', async (req, res) => {
             user: {
                 id: data.user.id,
                 email: data.user.email,
-                name: profile?.name || 'Athlete',
-                athleteCode: profile?.athlete_code || 'MACRA-0000',
-                tier: profile?.tier || 'free'
+                name: userProfile?.name || 'Athlete',
+                athleteCode: userProfile?.athlete_code || 'MACRA-0000',
+                tier: userProfile?.tier || 'free'
             }
         });
     } catch (error) {
