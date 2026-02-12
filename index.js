@@ -1664,17 +1664,42 @@ app.post('/api/v2/learning/parse-exercise', authenticateToken, async (req, res) 
     try {
         const { input } = req.body;
         
+        // Extract weight, reps, sets from input string
+        function extractNumbers(str) {
+            const result = { weight: 0, reps: 0, sets: 1 };
+            // Pattern: "185 x 5", "185lbs x 5", "185 5x3", etc.
+            const wxr = str.match(/(\d+)\s*(?:lbs?|pounds?)?\s*[x×]\s*(\d+)/i);
+            if (wxr) {
+                result.weight = parseInt(wxr[1]);
+                result.reps = parseInt(wxr[2]);
+            }
+            // Pattern: "3x10" (sets x reps) when appears after weight
+            const sxr = str.match(/(\d+)\s*[x×]\s*(\d+)\s*[x×]\s*(\d+)/i);
+            if (sxr) {
+                result.weight = parseInt(sxr[1]);
+                result.sets = parseInt(sxr[2]);
+                result.reps = parseInt(sxr[3]);
+            }
+            return result;
+        }
+        
+        const numbers = extractNumbers(input);
+        
         // Common abbreviations
         const abbrevs = {
             'fb bb': 'Flat Bench Barbell Press', 'bench': 'Flat Bench Barbell Press',
-            'inc bb': 'Incline Barbell Press', 'ohp': 'Overhead Press',
-            'dl': 'Deadlift', 'squat': 'Barbell Back Squat', 'bb row': 'Barbell Row'
+            'inc bb': 'Incline Barbell Press', 'incline': 'Incline Bench Press',
+            'ohp': 'Overhead Press', 'dl': 'Deadlift',
+            'squat': 'Barbell Back Squat', 'bb row': 'Barbell Row'
         };
         
         const lower = input.toLowerCase();
         for (const [abbr, name] of Object.entries(abbrevs)) {
             if (lower.includes(abbr)) {
-                return res.json({ parsed: { standard_name: name, category: 'other', confidence: 0.9 } });
+                return res.json({ parsed: { 
+                    standard_name: name, category: 'other', confidence: 0.9,
+                    weight: numbers.weight, reps: numbers.reps, sets: numbers.sets
+                }});
             }
         }
         
@@ -1686,6 +1711,10 @@ app.post('/api/v2/learning/parse-exercise', authenticateToken, async (req, res) 
         });
         
         const parsed = JSON.parse(message.content[0].text.replace(/```json\n?|\n?```/g, ''));
+        // Merge AI result with extracted numbers
+        parsed.weight = parsed.weight || numbers.weight;
+        parsed.reps = parsed.reps || numbers.reps;
+        parsed.sets = parsed.sets || numbers.sets;
         res.json({ parsed });
     } catch (error) {
         res.status(500).json({ error: 'Failed to parse exercise' });
