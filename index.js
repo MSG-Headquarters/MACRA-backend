@@ -8,6 +8,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const { createDecryptMiddleware, encryptResponse } = require('./macra-crypto-middleware');
 
 const app = express();
 
@@ -18,6 +19,9 @@ const supabase = createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_SERVICE_KEY
 );
+
+// Create crypto middleware instance
+const decryptRequest = createDecryptMiddleware(supabase);
 
 // Initialize Anthropic
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -1149,6 +1153,12 @@ app.get('/api/v2/workout/active', authenticateToken, async (req, res) => {
             .single();
         
         if (error && error.code !== 'PGRST116') throw error;
+        if (data) {
+            const { data: profile } = await supabase.from('users').select('athlete_code').eq('id', req.user.userId).single();
+            if (profile?.athlete_code) {
+                return res.json({ session: encryptResponse(data, profile.athlete_code) });
+            }
+        }
         res.json({ session: data || null });
     } catch (error) {
         console.error('Get active workout error:', error);
@@ -1156,7 +1166,7 @@ app.get('/api/v2/workout/active', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/v2/workout/start', authenticateToken, async (req, res) => {
+app.post('/api/v2/workout/start', authenticateToken, decryptRequest, async (req, res) => {
     try {
         const { workout_name } = req.body;
         
@@ -1186,14 +1196,14 @@ app.post('/api/v2/workout/start', authenticateToken, async (req, res) => {
             .single();
         
         if (error) throw error;
-        res.json({ session: data });
+        res.json({ session: req.athleteCode ? encryptResponse(data, req.athleteCode) : data });
     } catch (error) {
         console.error('Start workout error:', error);
         res.status(500).json({ error: 'Failed to start workout' });
     }
 });
 
-app.post('/api/v2/workout/exercise', authenticateToken, async (req, res) => {
+app.post('/api/v2/workout/exercise', authenticateToken, decryptRequest, async (req, res) => {
     try {
         const { session_id, exercise_name, original_input, weight, reps, sets, category } = req.body;
         
@@ -1248,14 +1258,14 @@ app.post('/api/v2/workout/exercise', authenticateToken, async (req, res) => {
             .single();
         
         if (updateError) throw updateError;
-        res.json({ session: updated });
+        res.json({ session: req.athleteCode ? encryptResponse(updated, req.athleteCode) : updated });
     } catch (error) {
         console.error('Add exercise error:', error);
         res.status(500).json({ error: 'Failed to add exercise' });
     }
 });
 
-app.delete('/api/v2/workout/exercise', authenticateToken, async (req, res) => {
+app.delete('/api/v2/workout/exercise', authenticateToken, decryptRequest, async (req, res) => {
     try {
         const { session_id, exercise_id, set_num } = req.body;
         
@@ -1295,13 +1305,13 @@ app.delete('/api/v2/workout/exercise', authenticateToken, async (req, res) => {
             .select()
             .single();
         
-        res.json({ session: updated });
+        res.json({ session: req.athleteCode ? encryptResponse(updated, req.athleteCode) : updated });
     } catch (error) {
         res.status(500).json({ error: 'Failed to delete' });
     }
 });
 
-app.post('/api/v2/workout/finalize', authenticateToken, async (req, res) => {
+app.post('/api/v2/workout/finalize', authenticateToken, decryptRequest, async (req, res) => {
     try {
         const { session_id, workout_name, notes } = req.body;
         
@@ -1329,13 +1339,13 @@ app.post('/api/v2/workout/finalize', authenticateToken, async (req, res) => {
             .select()
             .single();
         
-        res.json({ session: updated });
+        res.json({ session: req.athleteCode ? encryptResponse(updated, req.athleteCode) : updated });
     } catch (error) {
         res.status(500).json({ error: 'Failed to finalize' });
     }
 });
 
-app.post('/api/v2/workout/cancel', authenticateToken, async (req, res) => {
+app.post('/api/v2/workout/cancel', authenticateToken, decryptRequest, async (req, res) => {
     try {
         const { session_id } = req.body;
         
