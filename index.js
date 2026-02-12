@@ -613,7 +613,7 @@ app.post('/api/auth/logout', (req, res) => {
     res.json({ success: true });
 });
 
-aapp.post('/api/auth/forgot-password', async (req, res) => {
+app.post('/api/auth/forgot-password', async (req, res) => {
     try {
         const { email } = req.body;
         if (!email) return res.status(400).json({ error: 'Email required' });
