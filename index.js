@@ -655,6 +655,44 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     }
 });
 
+app.post('/api/auth/change-password', authenticateToken, async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ error: 'Current and new password required' });
+        }
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'New password must be at least 6 characters' });
+        }
+
+        // Verify current password by attempting to sign in
+        const { data: profile } = await supabase.from('users').select('email').eq('id', req.user.userId).single();
+        if (!profile) return res.status(404).json({ error: 'User not found' });
+
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+            email: profile.email,
+            password: currentPassword
+        });
+
+        if (signInError) {
+            return res.status(401).json({ error: 'Current password is incorrect' });
+        }
+
+        // Update password
+        const { error: updateError } = await supabase.auth.admin.updateUserById(req.user.userId, {
+            password: newPassword
+        });
+
+        if (updateError) throw updateError;
+
+        console.log('Password changed for:', profile.email);
+        res.json({ success: true, message: 'Password updated successfully' });
+    } catch (error) {
+        console.error('Change password error:', error);
+        res.status(500).json({ error: 'Failed to change password' });
+    }
+});
+
 // Admin: Reset a user's password directly (protected by admin secret)
 app.post('/api/admin/reset-password', async (req, res) => {
     try {
